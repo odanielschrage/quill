@@ -21,7 +21,7 @@ Plan and rationale: [`../.issues/plan-001-windows-port.md`](../.issues/plan-001-
 | 6 | Single-file publish + docs | **done** |
 | 7 | Skip silence before inference (VAD) | **done** |
 | 7 | Device-change resilience | **done** |
-| 7 | Echo cancellation | pending |
+| 7 | Echo suppression in the transcript | **done** |
 
 ## CLI
 
@@ -56,6 +56,42 @@ that makes the macOS build write a plain LaunchAgent instead of using
 `SMAppService.mainApp`: no elevation, no XML, and the same per-user scope. It
 warns if you register a path inside `bin\Debug` or `bin\Release`, which would
 silently stop working the next time the project is cleaned.
+
+### Echo from the speakers
+
+Recording on speakers rather than headphones means the mic hears the other person
+too. That audio is already in the system track, so the same words get transcribed
+twice — once correctly as `them`, and once as if *you* had said them. A transcript
+that has you speaking the other person's lines is worse than no echo handling at
+all.
+
+`transcription.echo_suppression`, on by default, removes those mic segments after
+both tracks are transcribed. This is the approach `rca-001` landed on for macOS
+after Apple's `VoiceProcessingIO` turned out to deliver digital silence on some
+routes: quill already has a clean far-end track and both tracks on one clock, so
+the cheapest reliable place to remove echo is the transcript rather than the
+audio. Nothing about it is Windows-specific — the same rule would port to the
+Swift build unchanged.
+
+The test is **containment**, not similarity: what fraction of a mic segment's
+words were already coming out of the speakers at that moment. Echo is usually a
+degraded, partial pickup of the far end, so a symmetric similarity score reads low
+exactly when confidence should be high. Containment doesn't have that problem, and
+it fails safe where it matters — when both people talk at once the mic contributes
+words the system track doesn't have, containment drops, and the segment survives.
+
+Deliberately conservative, because dropping something real is the worse error:
+
+- Segments under three tokens are never touched. "sim", "certo", "ok" are as
+  likely to be a genuine reply as an echo.
+- A segment must overlap the far-end speech in time, which is what separates echo
+  from quoting someone back to them a minute later.
+- **Every removal is written to `transcribe.log`** with its text and score. The
+  rule is a heuristic, so what it discards stays recoverable rather than
+  vanishing.
+
+Nothing is marked in `transcript.json` — dropping keeps the on-disk contract
+identical to the macOS build's, and the log carries the audit trail instead.
 
 ## doctor
 

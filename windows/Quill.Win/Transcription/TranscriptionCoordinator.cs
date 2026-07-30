@@ -195,6 +195,14 @@ internal sealed class TranscriptionCoordinator(Func<ITranscriptionEngine> engine
         // flipping between runs.
         var ordered = merged.OrderBy(s => s.StartMs).ToList();
 
+        // Only worth doing once both tracks are on one clock, which is exactly
+        // here. Every removal is written to transcribe.log rather than silently
+        // dropped.
+        if (Config.TranscriptionEchoSuppression())
+        {
+            ordered = EchoSuppressor.Apply(ordered, message => Log(dir, message));
+        }
+
         var transcript = new Transcript
         {
             CreatedAt = Json.Iso8601(DateTimeOffset.Now),
