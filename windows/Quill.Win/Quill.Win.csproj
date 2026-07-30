@@ -1,10 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- Console-hosted for now so the pipeline stays testable from a terminal.
-         Becomes WinExe when the tray lands, which is also when attaching to the
-         parent console becomes necessary to print anything. -->
-    <OutputType>Exe</OutputType>
+    <!-- A tray daemon has no window and must not flash a console. The cost is
+         that stdout goes nowhere unless ConsoleBridge attaches to the parent's
+         console, which is why every console-facing subcommand calls it first. -->
+    <OutputType>WinExe</OutputType>
+    <UseWindowsForms>true</UseWindowsForms>
     <TargetFramework>net8.0-windows</TargetFramework>
     <AssemblyName>quill</AssemblyName>
     <RootNamespace>Quill</RootNamespace>
