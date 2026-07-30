@@ -30,6 +30,18 @@ internal static class WhisperModels
         "quill",
         "models");
 
+    /// Q5_0 download sizes, measured. Used by `doctor` to warn about disk space
+    /// before a meeting rather than after one.
+    public static int ApproximateSizeMb(GgmlType type) => type switch
+    {
+        GgmlType.Tiny => 28,
+        GgmlType.Base => 53,
+        GgmlType.Small => 167,
+        GgmlType.Medium => 514,
+        GgmlType.LargeV3Turbo => 547,
+        _ => 1100,
+    };
+
     public static string Slug(GgmlType type) =>
         Known.FirstOrDefault(m => m.Type == type).Name ?? type.ToString().ToLowerInvariant();
 
@@ -103,6 +115,17 @@ internal static class WhisperModels
             PathFor(type, quantization),
             Identifier(type, quantization),
             ct);
+
+    /// Silero VAD weights — about 2 MB, unrelated to the transcription model, and
+    /// downloaded only when VAD is switched on.
+    public const string VadModel = "ggml-silero-v6.2.0";
+
+    public static string VadPath { get; } = Path.Combine(CacheDirectory, $"{VadModel}.bin");
+
+    public static bool IsVadCached() => File.Exists(VadPath);
+
+    public static Task<string> EnsureVadAsync(CancellationToken ct = default) =>
+        EnsureFileAsync($"{BaseUrl}/vad/{VadModel}.bin", VadPath, VadModel, ct);
 
     private static async Task<string> EnsureFileAsync(
         string url, string path, string name, CancellationToken ct)
