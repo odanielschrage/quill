@@ -86,6 +86,16 @@ internal static class Config
     public static string TranscriptionEngine() =>
         Transcription()?["engine"]?.GetValue<string>() ?? "whisper";
 
+    /// GGML model size — the speed/accuracy dial. Default set by measurement
+    /// (`quill bench`) rather than by assumption.
+    public static string TranscriptionModel() =>
+        Transcription()?["model"]?.GetValue<string>() ?? "small";
+
+    /// Spoken language hint, or "auto" to let Whisper detect it. Windows-only
+    /// key: the macOS Parakeet engine is English-only and has no equivalent.
+    public static string TranscriptionLanguage() =>
+        Transcription()?["language"]?.GetValue<string>() ?? "auto";
+
     /// Acoustic echo cancellation on the mic. Default off, matching macOS after
     /// rca-001; the Windows Voice Capture DSP is a post-MVP phase.
     public static bool MicVoiceProcessing() =>

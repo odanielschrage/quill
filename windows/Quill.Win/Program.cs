@@ -1,14 +1,19 @@
+using System.Diagnostics;
+using System.Text;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 using Quill;
 using Quill.Audio;
+using Quill.Transcription;
+using Whisper.net.Ggml;
 
 // Placeholder entry point. The real CLI — `run --out`, `doctor`, `install
 // --launch-at-login` / `--uninstall` — arrives with the tray daemon.
 //
-// `record` and `gaptest` are the harnesses this capture layer was verified with.
+// These are the harnesses each layer was verified with.
 
+// Full pipeline: capture both tracks, then transcribe them.
 if (args is ["record", ..])
 {
     var seconds = args.Length > 1 && int.TryParse(args[1], out var parsed) ? parsed : 15;
@@ -30,17 +35,20 @@ if (args is ["record", ..])
     Report(session.Dir, RecordingSession.SystemFile, system.SamplesPadded);
     Console.WriteLine($"  first buffer  mic {mic.FirstBufferAt:HH:mm:ss.fff}  "
                       + $"system {system.FirstBufferAt?.ToString("HH:mm:ss.fff") ?? "never"}");
-    Console.WriteLine($"  meta.json     {File.ReadAllText(Path.Combine(session.Dir, "meta.json"))
-        .Replace("\n", "\n                ", StringComparison.Ordinal)}");
-    Console.WriteLine($"  session       {session.Dir}");
-    return 0;
+
+    return Transcribe(session.Dir);
+}
+
+// Run the queue against an existing session folder. Re-transcription, and how the
+// merge/offset path gets exercised without recording a meeting.
+if (args is ["transcribe", var sessionDir, ..])
+{
+    return Transcribe(sessionDir);
 }
 
 // The acceptance check for the silence ledger, driven end to end on real
 // hardware: capture loopback for 12s while a tone plays only during seconds 0-3
 // and 7-10. A correct ledger yields a ~12s track with ~6s of inserted silence.
-// Without it the track collapses to the ~6s that were audible, and the system
-// transcript's timestamps drift out of step with the mic's.
 if (args is ["gaptest", ..])
 {
     var root = Path.Combine(Path.GetTempPath(), "quill-gaptest");
@@ -69,15 +77,129 @@ if (args is ["gaptest", ..])
     return duration > 10.5 ? 0 : 1;
 }
 
-Console.WriteLine("quill (windows) — capture only, no transcription yet");
+// Times every model against one file so the default comes from measurement
+// rather than from the Apple Silicon numbers in the macOS README, which do not
+// transfer to CPU.
+if (args is ["bench", var audioPath, ..])
+{
+    if (!File.Exists(audioPath))
+    {
+        Console.Error.WriteLine($"no such file: {audioPath}");
+        return 64;
+    }
+
+    var reference = args.Length > 2 && File.Exists(args[2])
+        ? Normalize(File.ReadAllText(args[2]))
+        : null;
+
+    double audioSeconds;
+    using (var probe = new WaveFileReader(audioPath)) audioSeconds = probe.TotalTime.TotalSeconds;
+
+    var language = Config.TranscriptionLanguage();
+    Console.WriteLine($"audio {audioSeconds:F1}s · language {language} · "
+                      + $"{Environment.ProcessorCount} logical cores");
+    Console.WriteLine();
+    Console.WriteLine("  model            load     run     xRT   WER   segments");
+    Console.WriteLine("  ---------------------------------------------------------");
+
+    GgmlType[] candidates =
+    [
+        GgmlType.Tiny, GgmlType.Base, GgmlType.Small, GgmlType.Medium, GgmlType.LargeV3Turbo,
+    ];
+
+    var transcripts = new List<(string Model, string Text)>();
+    foreach (var type in candidates)
+    {
+        var engine = new WhisperEngine(type, WhisperModels.Quantization, language);
+        try
+        {
+            var loading = Stopwatch.StartNew();
+            await engine.PrepareAsync();
+            loading.Stop();
+
+            var running = Stopwatch.StartNew();
+            var segments = await engine.TranscribeAsync(audioPath);
+            running.Stop();
+
+            var text = string.Join(" ", segments.Select(s => s.Text));
+            var realtime = audioSeconds / running.Elapsed.TotalSeconds;
+            var wer = reference is null
+                ? "  —  "
+                : $"{100.0 * WordErrorRate(reference, Normalize(text)):F1}%";
+
+            Console.WriteLine(
+                $"  {WhisperModels.Slug(type),-14} "
+                + $"{loading.Elapsed.TotalSeconds,6:F1}s {running.Elapsed.TotalSeconds,6:F1}s "
+                + $"{realtime,6:F2} {wer,6} {segments.Count,6}");
+            transcripts.Add((WhisperModels.Slug(type), text));
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine($"  {WhisperModels.Slug(type),-14} failed: {e.Message}");
+        }
+        finally
+        {
+            await engine.ReleaseAsync();
+        }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("xRT = seconds of audio per second of compute; higher is faster.");
+    Console.WriteLine();
+    foreach (var (model, text) in transcripts)
+    {
+        Console.WriteLine($"[{model}] {text}");
+        Console.WriteLine();
+    }
+    return 0;
+}
+
+Console.WriteLine("quill (windows) — capture + transcription, no tray yet");
 Console.WriteLine($"  config:     {Config.ExistingPath() ?? "(none)"}");
-Console.WriteLine($"              primary  {Config.PrimaryPath}");
-Console.WriteLine($"              fallback {Config.FallbackPath}");
 Console.WriteLine($"  recordings: {Config.ResolveRoot(null)}");
-Console.WriteLine($"  on_stop:    {Config.OnStop() ?? "(none)"}");
+Console.WriteLine($"  transcribe: enabled={Config.TranscriptionEnabled()} "
+                  + $"model={Config.TranscriptionModel()} "
+                  + $"language={Config.TranscriptionLanguage()}");
+Console.WriteLine($"  models:     {WhisperModels.CacheDirectory}");
 Console.WriteLine();
-Console.WriteLine("  try: quill record 15 · quill gaptest");
+Console.WriteLine("  try: quill record 15 · quill gaptest · quill bench <wav> [ref.txt]");
 return 0;
+
+static int Transcribe(string sessionDir)
+{
+    if (!File.Exists(Path.Combine(sessionDir, "meta.json")))
+    {
+        Console.Error.WriteLine($"not a session folder (no meta.json): {sessionDir}");
+        return 64;
+    }
+
+    // Wait on the queue's own signal rather than polling for the file: a job that
+    // fails never produces one. ManualResetEventSlim latches, so a drain that
+    // finishes before the wait starts is not a race.
+    using var finished = new ManualResetEventSlim(false);
+    var queue = new TranscriptionCoordinator(WhisperEngine.FromConfig)
+    {
+        StatusHandler = status =>
+        {
+            Console.Error.WriteLine($"  [{status.Kind}] {status.Session}");
+            if (status.Kind is StatusKind.Idle or StatusKind.Failed) finished.Set();
+        },
+    };
+    queue.Enqueue(sessionDir);
+
+    if (!finished.Wait(TimeSpan.FromHours(1)))
+    {
+        Console.Error.WriteLine("timed out waiting for the transcription queue");
+    }
+
+    var output = Path.Combine(sessionDir, "transcript.md");
+    Console.WriteLine();
+    Console.WriteLine(File.Exists(output) ? File.ReadAllText(output) : "no transcript produced");
+    var log = Path.Combine(sessionDir, "transcribe.log");
+    if (File.Exists(log)) Console.WriteLine(File.ReadAllText(log));
+    Console.WriteLine($"  session  {sessionDir}");
+    return File.Exists(output) ? 0 : 1;
+}
 
 /// Audible tone through the default render device, then a full stop so the
 /// endpoint goes idle — which is what makes loopback stop delivering buffers and
@@ -121,8 +243,6 @@ static void Report(string dir, string file, long samplesPadded)
     }
 }
 
-/// Decoded peak amplitude — the difference between "recorded silence" and
-/// "recorded nothing", which is the thing worth knowing after a test capture.
 static float Peak(WaveFileReader reader)
 {
     var peak = 0f;
@@ -137,4 +257,40 @@ static float Peak(WaveFileReader reader)
         frame = reader.ReadNextSampleFrame();
     }
     return peak;
+}
+
+/// Lowercase, strip punctuation, split on whitespace — so WER measures words
+/// rather than comma placement. Accents are kept: they are part of the word in
+/// Portuguese.
+static string[] Normalize(string text)
+{
+    var builder = new StringBuilder(text.Length);
+    foreach (var character in text.ToLowerInvariant())
+    {
+        if (char.IsLetterOrDigit(character)) builder.Append(character);
+        else if (char.IsWhiteSpace(character) || character is '-') builder.Append(' ');
+    }
+    return builder.ToString()
+        .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+}
+
+static double WordErrorRate(string[] reference, string[] hypothesis)
+{
+    if (reference.Length == 0) return hypothesis.Length == 0 ? 0 : 1;
+
+    var distance = new int[reference.Length + 1, hypothesis.Length + 1];
+    for (var i = 0; i <= reference.Length; i++) distance[i, 0] = i;
+    for (var j = 0; j <= hypothesis.Length; j++) distance[0, j] = j;
+
+    for (var i = 1; i <= reference.Length; i++)
+    {
+        for (var j = 1; j <= hypothesis.Length; j++)
+        {
+            var substitution = distance[i - 1, j - 1]
+                               + (reference[i - 1] == hypothesis[j - 1] ? 0 : 1);
+            distance[i, j] = Math.Min(
+                Math.Min(distance[i - 1, j] + 1, distance[i, j - 1] + 1), substitution);
+        }
+    }
+    return (double)distance[reference.Length, hypothesis.Length] / reference.Length;
 }
