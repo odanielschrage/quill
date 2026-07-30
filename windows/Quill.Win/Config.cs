@@ -103,6 +103,13 @@ internal static class Config
     public static bool TranscriptionVad() =>
         Transcription()?["vad"]?.GetValue<bool>() ?? true;
 
+    /// Remove mic segments that merely echo the system track, once both are
+    /// transcribed. Default on: recording through speakers otherwise puts the
+    /// other person's words in the transcript twice, the second time attributed
+    /// to you. Costs nothing on headphones, where there is no echo to find.
+    public static bool TranscriptionEchoSuppression() =>
+        Transcription()?["echo_suppression"]?.GetValue<bool>() ?? true;
+
     /// Acoustic echo cancellation on the mic. Default off, matching macOS after
     /// rca-001; the Windows Voice Capture DSP is a post-MVP phase.
     public static bool MicVoiceProcessing() =>

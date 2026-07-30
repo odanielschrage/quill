@@ -2,7 +2,7 @@
 title: "Windows port — native C#/.NET sibling implementation"
 date: 2026-07-29
 status: done
-progress: "MVP completo — fases 0–6 concluídas, 65 testes passando, binário único verificado"
+progress: "completo — fases 0–7 concluídas, 95 testes passando, binário único verificado"
 affects: "platform support — new windows/ implementation alongside Sources/quill"
 ---
 
@@ -363,11 +363,28 @@ dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
   Falhando cinco vezes seguidas, desiste com notificação — mas a sessão continua e
   a faixa mantém o comprimento, porque o `Stop()` preenche até o tempo decorrido.
   Um dispositivo morto custa o áudio daquela faixa, nunca o alinhamento da outra.
-- AEC via Voice Capture DSP, atrás de `mic_voice_processing`.
-- Supressão de eco no nível do transcript — a ideia já esboçada no rca-001, melhor e
-  multiplataforma: marcar segmento do mic como eco quando ele se sobrepõe no tempo a
-  um segmento do sistema **e** tem alta similaridade fuzzy de tokens, preservando
-  segmentos com palavras próprias substanciais para que interrupções sobrevivam.
+- ✅ **Supressão de eco no nível do transcript** — feito, e escolhido em vez do
+  Voice Capture DSP. O quill já tem a faixa distante limpa e as duas faixas num só
+  relógio, então o lugar mais barato e confiável de remover eco é o transcript, não
+  o áudio. É a ideia do rca-001, e nada nela é específico do Windows — a mesma regra
+  portaria para o build Swift sem mudança.
+
+  Um desvio do esboço do rca-001: a métrica é **contenção**, não similaridade fuzzy.
+  Eco costuma ser uma captação degradada e parcial do lado distante, então
+  similaridade simétrica lê baixo exatamente quando a confiança deveria ser alta.
+  Contenção — que fração das palavras do mic já estava tocando naquele instante —
+  não tem esse problema, e falha para o lado seguro no caso que importa: em
+  double-talk o mic contribui palavras que o sistema não tem, a contenção cai, e o
+  segmento sobrevive.
+
+  Conservador de propósito: segmentos com menos de 3 tokens nunca são tocados, e é
+  exigida sobreposição temporal (o que separa eco de citar alguém um minuto depois).
+  **Toda remoção vai para o `transcribe.log`** com texto e score — é heurística, então
+  o que ela descarta continua recuperável.
+
+- AEC no caminho do áudio via Voice Capture DSP: não implementado, e provavelmente
+  desnecessário agora. Fica como opção se a supressão no transcript se mostrar
+  insuficiente em uso real.
 - Aceleração por iGPU (OpenVINO/DirectML).
 - Motor Parakeet via `org.k2fsa.sherpa.onnx` para paridade em inglês — requer spike
   antes: os docs C# não confirmam timestamps por palavra em modelos NeMo transducer.

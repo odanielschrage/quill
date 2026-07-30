@@ -142,6 +142,11 @@ serves both.
   inference, which is mostly about the system track: much of it is silence the
   capture ledger inserted. It also keeps Whisper from hallucinating content into
   long quiet stretches, which is the better reason.
+- `transcription.echo_suppression` — Windows only, on by default. Recording on
+  speakers puts the other person's words in the mic track too, so they land in the
+  transcript twice, the second time attributed to you. This removes those segments
+  once both tracks are transcribed, logging each removal. It is the same idea
+  `rca-001` proposes for macOS, and needs no echo canceller in the audio path.
 - `mic_voice_processing` — macOS only, and off by default. Apple's echo
   cancellation on the mic; set `true` when recording meetings through the
   speakers, so playback doesn't bleed into the mic track and get transcribed
