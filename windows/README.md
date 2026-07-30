@@ -19,7 +19,9 @@ Plan and rationale: [`../.issues/plan-001-windows-port.md`](../.issues/plan-001-
 | 4 | Tray icon, notifications, session-end handling | **done** |
 | 5 | `doctor`, `install --launch-at-login`, real CLI | **done** |
 | 6 | Single-file publish + docs | **done** |
-| 7 | VAD, device-change resilience, echo cancellation | pending |
+| 7 | Skip silence before inference (VAD) | **done** |
+| 7 | Device-change resilience | **done** |
+| 7 | Echo cancellation | pending |
 
 ## CLI
 
@@ -39,6 +41,8 @@ quill record 15              # capture both tracks for 15s, then transcribe
 quill transcribe <dir>       # re-run the queue on a session folder
 quill gaptest                # R1 acceptance check — plays a tone, checks timeline
 quill bench <wav> [ref.txt]  # time every model
+quill vadtest <speech.wav>   # silence-skipping: timeline correctness + speed
+quill devicetest             # forces two capture reopens mid-recording
 quill icons <dir>            # write the generated tray icons out to look at
 ```
 
@@ -114,6 +118,100 @@ Silence *before* the first buffer needs no ledger — `start_offset_ms` in
 `meta.json` carries that skew, and the merge shifts by it. Worth knowing: WASAPI
 took ~2s to deliver its first buffer on a 2017 dual-core laptop, so that skew is
 not hypothetical.
+
+## Swapping headphones mid-meeting
+
+Routine on Windows, and it fails in two distinct ways.
+
+The device can be **invalidated** — unplug a USB headset and WASAPI tears the
+capture down. That surfaces through `RecordingStopped`, so it is at least
+detectable.
+
+Or the **default can move while the old device stays perfectly valid**. Plug in
+headphones and loopback keeps dutifully recording the speakers, which are now
+silent. Nothing errors. The track just goes quiet for the rest of the meeting,
+and you find out when you read the transcript. This one is worse.
+
+Both are handled by reopening the capture on whatever the default is now — the
+second via an `IMMNotificationClient` watching `OnDefaultDeviceChanged`, filtered
+to this track's side of the graph and to the `Console` role, because Windows
+raises the notification once per role and acting on all three would reopen three
+times for one plug.
+
+The `TrackWriter` deliberately outlives the capture: same file, same ledger, same
+`FirstBufferAt`. So a device switch becomes a gap the ledger fills rather than the
+end of the track, and the two tracks keep sharing a clock. Verified with
+`quill devicetest`, which forces two reopens mid-recording:
+
+```
+duration   12,51s  (expected ~12)
+reopens         2  (expected 2)
+padded      1,63s  (the reopen gaps)
+tail peak   0,438  (audio still arriving after the last reopen)
+```
+
+If reopening fails five times running, quill gives up, says so, and fires a
+notification — but the session keeps going and the track keeps its full length,
+because `Stop()` pads to the elapsed time regardless. A dead device costs you that
+track's audio, never the other track's alignment.
+
+## What differs from macOS, and why
+
+- **WAV mono 16 kHz** instead of AAC-in-CAF. It's what the ASR consumes anyway,
+  it streams, and a truncated WAV is recoverable by rebuilding its header —
+  which preserves the crash-tolerance property that motivated CAF.
+- **Whisper instead of Parakeet.** Parakeet TDT v2 is English-only and Core ML.
+  Whisper is multilingual, which the macOS README already lists as the planned
+  fallback engine.
+- **`transcription.language`** is a Windows-only config key (`auto`, `pt`, `en`,
+  …). The macOS engine is English-only and has no equivalent.
+- **`QUILL_CONFIG`** env var overrides the config path, so a second profile
+  doesn't disturb the installed one.
+- **No permission dance for system audio.** WASAPI loopback needs no consent
+  prompt, so the embedded `Info.plist` and the "state unknowable until first
+  use" doctor check both disappear.
+- **Config lives at `%APPDATA%\quill\config.json`**, with
+  `~/.config/quill/config.json` still read so one dotfiles repo serves both
+  platforms.
+
+## The tray
+
+`NotifyIcon` is the whole UI, as `NSStatusItem` is on macOS. Four things the
+macOS build gets for free had to be built here:
+
+- **The icon has to pick its own colour.** macOS template images adapt to the
+  menu bar automatically. Windows doesn't, and a white feather vanishes on a
+  light taskbar while a black one vanishes on a dark one, so
+  [`FeatherIcon`](Quill.Win/UI/FeatherIcon.cs) reads
+  `Themes\Personalize\SystemUsesLightTheme` and picks. Recording red needs no
+  check — it reads on both.
+- **The feather is drawn in code**, transcribed from the same Lucide SVG path
+  into GDI+ and packed into an in-memory multi-size `.ico`. Same motivation as
+  the macOS build inlining its SVG: no resource file to install beside the
+  executable. `quill icons <dir>` writes them out to look at.
+- **The elapsed counter goes in the tooltip as well as the menu.** The
+  notification area has no room for inline text next to the icon.
+- **Left-click opens the menu.** Windows only does that on right-click by
+  default; macOS opens on any click.
+
+Notifications are `ShowBalloonTip`. A real WinRT toast would need an AUMID and a
+Start Menu shortcut — precisely the app bundle this project refuses to become —
+so a balloon is the honest analogue of the macOS build's
+`osascript display notification`.
+
+### Shutdown
+
+`SystemEvents.SessionEnding` is the Windows counterpart of the macOS build's
+SIGINT handler, and it is not optional: without it, powering off mid-meeting
+leaves WAVs with no finalized header and no `meta.json`, which makes the session
+invisible to the transcription queue forever.
+
+It deliberately finalizes files on the SystemEvents thread rather than marshalling
+to the UI thread. Windows allows a short window before it kills the process, and
+waiting on a message loop that may already be tearing down is a bad trade against
+losing the recording. It does not queue transcription either — the session ends up
+with `meta.json` and no `transcript.json`, which is exactly what `ResumePending()`
+looks for on the next launch.
 
 ## Transcription
 
