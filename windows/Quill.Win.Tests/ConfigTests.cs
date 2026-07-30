@@ -21,6 +21,8 @@ public sealed class ConfigTests : IDisposable
     {
         Assert.True(Config.TranscriptionEnabled());
         Assert.Equal("whisper", Config.TranscriptionEngine());
+        Assert.Equal("small", Config.TranscriptionModel());
+        Assert.Equal("auto", Config.TranscriptionLanguage());
         Assert.False(Config.MicVoiceProcessing());
         Assert.Null(Config.OnStop());
         Assert.Equal(Config.DefaultRoot, Config.ResolveRoot(null));
@@ -32,7 +34,7 @@ public sealed class ConfigTests : IDisposable
         UseConfig("""
         {
           "recordings_dir": "~/Reunioes",
-          "transcription": { "engine": "whisper" },
+          "transcription": { "engine": "whisper", "model": "medium", "language": "pt" },
           "mic_voice_processing": true,
           "on_stop": "python summarize.py"
         }
@@ -40,7 +42,8 @@ public sealed class ConfigTests : IDisposable
 
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         Assert.Equal(Path.Combine(home, "Reunioes"), Config.ResolveRoot(null));
-        Assert.Equal("whisper", Config.TranscriptionEngine());
+        Assert.Equal("medium", Config.TranscriptionModel());
+        Assert.Equal("pt", Config.TranscriptionLanguage());
         Assert.True(Config.MicVoiceProcessing());
         Assert.Equal("python summarize.py", Config.OnStop());
     }
