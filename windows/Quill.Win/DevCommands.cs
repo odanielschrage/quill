@@ -15,7 +15,7 @@ namespace Quill;
 internal static class DevCommands
 {
     private static readonly string[] Names =
-        ["record", "transcribe", "gaptest", "bench", "icons", "status"];
+        ["record", "transcribe", "gaptest", "bench", "icons", "vadtest", "devicetest", "status"];
 
     public static bool Handles(string command) => Names.Contains(command);
 
@@ -26,8 +26,198 @@ internal static class DevCommands
         ["gaptest", ..] => GapTest(),
         ["bench", var audio, ..] => await BenchAsync(audio, args.Length > 2 ? args[2] : null),
         ["icons", var dir, ..] => DumpIcons(dir),
+        ["vadtest", var speech, ..] => await VadTestAsync(speech),
+        ["devicetest", ..] => DeviceTest(),
         _ => Status(),
     };
+
+    /// Phase 7 acceptance check for surviving a device change.
+    ///
+    /// Unplugging a headset can't be automated, so this drives the same code path
+    /// directly: capture loopback with a tone playing throughout, force the
+    /// capture to reopen twice mid-recording, and check that the track comes out
+    /// full length with audio still arriving at the end. The reopen gap should
+    /// show up as ledger padding rather than as a truncated track — that's what
+    /// keeps the two tracks sharing a clock when someone swaps headphones.
+    private static int DeviceTest()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "quill-devicetest");
+        Directory.CreateDirectory(dir);
+        var track = Path.Combine(dir, "system.wav");
+
+        using var output = new WasapiOut(AudioClientShareMode.Shared, 100);
+        output.Init(new SignalGenerator(48_000, 2)
+        {
+            Type = SignalGeneratorType.Sin, Frequency = 440, Gain = 0.2,
+        }.ToWaveProvider());
+
+        using var loopback = new SystemAudioRecorder();
+        Console.Error.WriteLine("● capturing 12s with a 440 Hz tone, forcing 2 reopens");
+        loopback.Start(track);
+        output.Play();
+
+        Thread.Sleep(TimeSpan.FromSeconds(4));
+        loopback.RequestRestart("simulated device change");
+        Thread.Sleep(TimeSpan.FromSeconds(4));
+        loopback.RequestRestart("simulated device change");
+        Thread.Sleep(TimeSpan.FromSeconds(4));
+
+        output.Stop();
+        loopback.Stop();
+
+        var padded = (double)loopback.SamplesPadded / TrackWriter.SampleRate;
+        var restarts = loopback.RestartCount;
+
+        double duration, tailPeak;
+        using (var reader = new WaveFileReader(track))
+        {
+            duration = reader.TotalTime.TotalSeconds;
+            tailPeak = PeakOfLastSeconds(reader, 2);
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"  duration  {duration,6:F2}s  (expected ~12)");
+        Console.WriteLine($"  reopens   {restarts,6}    (expected 2)");
+        Console.WriteLine($"  padded    {padded,6:F2}s  (the reopen gaps)");
+        Console.WriteLine($"  tail peak {tailPeak,6:F3}    (audio still arriving after the last reopen)");
+        Console.WriteLine();
+
+        var lengthOk = duration > 10.5;
+        var reopenedOk = restarts == 2;
+        var stillCapturing = tailPeak > 0.001;
+
+        Console.WriteLine($"  timeline  {(lengthOk ? "PASS" : "FAIL")} — track kept its full length");
+        Console.WriteLine($"  reopen    {(reopenedOk ? "PASS" : "FAIL")} — capture came back both times");
+        Console.WriteLine($"  audio     {(stillCapturing ? "PASS" : "FAIL")} — recording after the reopen");
+
+        return lengthOk && reopenedOk && stillCapturing ? 0 : 1;
+    }
+
+    private static float PeakOfLastSeconds(WaveFileReader reader, int seconds)
+    {
+        var from = Math.Max(0, reader.Length - (seconds * TrackWriter.SampleRate * 2L));
+        reader.Position = from - from % 2;
+        return Peak(reader);
+    }
+
+    /// Phase 7 acceptance check for skipping silence.
+    ///
+    /// Builds a track with a known amount of silence in front of real speech, then
+    /// transcribes it both ways. The speed-up is the point of the feature, but the
+    /// timestamp is the thing that can go silently wrong: transcribing only the
+    /// speech hands Whisper a shortened clip numbered from zero, so if the shift
+    /// back onto the track's timeline is missing or wrong, the first segment lands
+    /// at 0:00 instead of where it was spoken — and the two tracks stop sharing a
+    /// clock.
+    private static async Task<int> VadTestAsync(string speechPath)
+    {
+        if (!File.Exists(speechPath))
+        {
+            Console.Error.WriteLine($"no such file: {speechPath}");
+            return 64;
+        }
+
+        var lead = TimeSpan.FromSeconds(30);
+        var tail = TimeSpan.FromSeconds(15);
+        var dir = Path.Combine(Path.GetTempPath(), "quill-vadtest");
+        Directory.CreateDirectory(dir);
+        var track = Path.Combine(dir, "padded.wav");
+
+        double trackSeconds;
+        using (var source = new WaveFileReader(speechPath))
+        {
+            if (source.WaveFormat.SampleRate != SpeechRegion.SampleRate
+                || source.WaveFormat.Channels != 1
+                || source.WaveFormat.BitsPerSample != 16)
+            {
+                Console.Error.WriteLine("vadtest needs a mono 16-bit 16 kHz wav");
+                return 64;
+            }
+
+            using var writer = new WaveFileWriter(
+                track, new WaveFormat(SpeechRegion.SampleRate, 16, 1));
+            WriteSilence(writer, lead);
+            source.CopyTo(writer);
+            WriteSilence(writer, tail);
+            trackSeconds = writer.Length / 2.0 / SpeechRegion.SampleRate;
+        }
+
+        Console.WriteLine($"track {trackSeconds:F1}s — {lead.TotalSeconds:F0}s silence, "
+                          + $"speech, {tail.TotalSeconds:F0}s silence");
+        Console.WriteLine($"language {Config.TranscriptionLanguage()} · "
+                          + $"model {Config.TranscriptionModel()}");
+        Console.WriteLine();
+
+        var whole = await MeasureAsync(track, useVad: false);
+        var speechOnly = await MeasureAsync(track, useVad: true);
+
+        Console.WriteLine("  mode        elapsed   skipped   first segment   text");
+        Console.WriteLine("  ----------------------------------------------------------");
+        Report("whole", whole);
+        Report("vad", speechOnly);
+        Console.WriteLine();
+
+        // The speech starts exactly `lead` into the track. A correct shift puts
+        // the first segment there; a missing one puts it at zero.
+        var drift = Math.Abs(speechOnly.FirstSegment.TotalSeconds - lead.TotalSeconds);
+        var aligned = drift < 2.0;
+        var faster = speechOnly.Elapsed < whole.Elapsed;
+
+        Console.WriteLine($"  timeline  {(aligned ? "PASS" : "FAIL")} — first segment at "
+                          + $"{speechOnly.FirstSegment.TotalSeconds:F1}s, expected "
+                          + $"~{lead.TotalSeconds:F0}s (drift {drift:F1}s)");
+        Console.WriteLine($"  speed     {(faster ? "PASS" : "FAIL")} — "
+                          + $"{whole.Elapsed.TotalSeconds:F1}s → {speechOnly.Elapsed.TotalSeconds:F1}s "
+                          + $"({whole.Elapsed.TotalSeconds / Math.Max(0.1, speechOnly.Elapsed.TotalSeconds):F2}× faster)");
+
+        return aligned && faster ? 0 : 1;
+
+        static void Report(string mode, Measurement m) => Console.WriteLine(
+            $"  {mode,-10} {m.Elapsed.TotalSeconds,7:F1}s {m.Skipped,8:F1}s "
+            + $"{m.FirstSegment.TotalSeconds,14:F1}s   {Truncate(m.FirstText, 40)}");
+    }
+
+    private readonly record struct Measurement(
+        TimeSpan Elapsed, double Skipped, TimeSpan FirstSegment, string FirstText);
+
+    private static async Task<Measurement> MeasureAsync(string track, bool useVad)
+    {
+        var engine = new WhisperEngine(
+            WhisperModels.Resolve(Config.TranscriptionModel()),
+            WhisperModels.Quantization,
+            Config.TranscriptionLanguage(),
+            useVad: useVad);
+        try
+        {
+            await engine.PrepareAsync();
+            var clock = Stopwatch.StartNew();
+            var segments = await engine.TranscribeAsync(track);
+            clock.Stop();
+
+            var first = segments.Count > 0 ? segments[0] : default;
+            return new Measurement(
+                clock.Elapsed, engine.SecondsSkipped, first.Start, first.Text ?? "");
+        }
+        finally
+        {
+            await engine.ReleaseAsync();
+        }
+    }
+
+    private static void WriteSilence(WaveFileWriter writer, TimeSpan duration)
+    {
+        var samples = (int)(duration.TotalSeconds * SpeechRegion.SampleRate);
+        var chunk = new byte[SpeechRegion.SampleRate * 2];
+        while (samples > 0)
+        {
+            var take = Math.Min(samples, SpeechRegion.SampleRate);
+            writer.Write(chunk, 0, take * 2);
+            samples -= take;
+        }
+    }
+
+    private static string Truncate(string text, int max) =>
+        text.Length <= max ? text : text[..max] + "…";
 
     /// Write the generated tray icons out so they can actually be looked at.
     /// The feather is drawn in code rather than shipped as a file, so "does it
@@ -238,8 +428,11 @@ internal static class DevCommands
         Console.WriteLine($"  transcribe: enabled={Config.TranscriptionEnabled()} "
                           + $"engine={Config.TranscriptionEngine()} "
                           + $"model={Config.TranscriptionModel()} "
-                          + $"language={Config.TranscriptionLanguage()}");
+                          + $"language={Config.TranscriptionLanguage()} "
+                          + $"vad={Config.TranscriptionVad()}");
         Console.WriteLine($"  models:     {WhisperModels.CacheDirectory}");
+        Console.WriteLine($"              {WhisperModels.VadModel,-15} "
+                          + $"{(WhisperModels.IsVadCached() ? "cached" : "not downloaded")}");
         foreach (var name in new[] { "tiny", "base", "small", "medium", "large-v3-turbo" })
         {
             var cached = WhisperModels.IsCached(

@@ -138,6 +138,10 @@ serves both.
 - `transcription.engine` — `parakeet` on macOS, `whisper` on Windows.
 - `transcription.model`, `transcription.language` — Windows only. Whisper is
   multilingual and comes in several sizes; Parakeet is neither.
+- `transcription.vad` — Windows only, on by default. Skips silence before
+  inference, which is mostly about the system track: much of it is silence the
+  capture ledger inserted. It also keeps Whisper from hallucinating content into
+  long quiet stretches, which is the better reason.
 - `mic_voice_processing` — macOS only, and off by default. Apple's echo
   cancellation on the mic; set `true` when recording meetings through the
   speakers, so playback doesn't bleed into the mic track and get transcribed

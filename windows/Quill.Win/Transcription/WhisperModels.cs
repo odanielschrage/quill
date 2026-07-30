@@ -116,6 +116,17 @@ internal static class WhisperModels
             Identifier(type, quantization),
             ct);
 
+    /// Silero VAD weights — about 2 MB, unrelated to the transcription model, and
+    /// downloaded only when VAD is switched on.
+    public const string VadModel = "ggml-silero-v6.2.0";
+
+    public static string VadPath { get; } = Path.Combine(CacheDirectory, $"{VadModel}.bin");
+
+    public static bool IsVadCached() => File.Exists(VadPath);
+
+    public static Task<string> EnsureVadAsync(CancellationToken ct = default) =>
+        EnsureFileAsync($"{BaseUrl}/vad/{VadModel}.bin", VadPath, VadModel, ct);
+
     private static async Task<string> EnsureFileAsync(
         string url, string path, string name, CancellationToken ct)
     {

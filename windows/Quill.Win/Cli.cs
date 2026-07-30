@@ -134,6 +134,8 @@ internal static class Cli
           quill transcribe <dir>           re-run the queue on a session folder
           quill gaptest                    loopback silence-ledger acceptance check
           quill bench <wav> [ref.txt]      time every transcription model
+          quill vadtest <speech.wav>       silence-skipping timeline + speed check
+          quill devicetest                 survive-a-device-change check
           quill icons <dir>                write the tray icons out as PNGs
 
         CONFIG

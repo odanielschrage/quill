@@ -86,8 +86,8 @@ internal static class Config
     public static string TranscriptionEngine() =>
         Transcription()?["engine"]?.GetValue<string>() ?? "whisper";
 
-    /// GGML model size — the speed/accuracy dial. Default set by measurement
-    /// (`quill bench`) rather than by assumption.
+    /// GGML model size — the speed/accuracy dial. Default set by the phase 3
+    /// benchmark rather than by assumption; "small" until that lands.
     public static string TranscriptionModel() =>
         Transcription()?["model"]?.GetValue<string>() ?? "small";
 
@@ -95,6 +95,13 @@ internal static class Config
     /// key: the macOS Parakeet engine is English-only and has no equivalent.
     public static string TranscriptionLanguage() =>
         Transcription()?["language"]?.GetValue<string>() ?? "auto";
+
+    /// Skip silence before inference using Silero VAD. Default on: the system
+    /// track is largely silence the capture ledger inserted, and Whisper
+    /// otherwise pays to transcribe it. Set false to feed every second of both
+    /// tracks to the model.
+    public static bool TranscriptionVad() =>
+        Transcription()?["vad"]?.GetValue<bool>() ?? true;
 
     /// Acoustic echo cancellation on the mic. Default off, matching macOS after
     /// rca-001; the Windows Voice Capture DSP is a post-MVP phase.
