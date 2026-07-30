@@ -109,11 +109,15 @@ internal static class WhisperModels
     /// has no timeout: a stalled connection there hung for fourteen hours without
     /// transferring a byte or reporting anything.
     public static Task<string> EnsureAsync(
-        GgmlType type, QuantizationType quantization, CancellationToken ct = default) =>
+        GgmlType type,
+        QuantizationType quantization,
+        IProgress<string>? progress = null,
+        CancellationToken ct = default) =>
         EnsureFileAsync(
             Url(type, quantization),
             PathFor(type, quantization),
             Identifier(type, quantization),
+            progress,
             ct);
 
     /// Silero VAD weights — about 2 MB, unrelated to the transcription model, and
@@ -124,11 +128,12 @@ internal static class WhisperModels
 
     public static bool IsVadCached() => File.Exists(VadPath);
 
-    public static Task<string> EnsureVadAsync(CancellationToken ct = default) =>
-        EnsureFileAsync($"{BaseUrl}/vad/{VadModel}.bin", VadPath, VadModel, ct);
+    public static Task<string> EnsureVadAsync(
+        IProgress<string>? progress = null, CancellationToken ct = default) =>
+        EnsureFileAsync($"{BaseUrl}/vad/{VadModel}.bin", VadPath, VadModel, progress, ct);
 
     private static async Task<string> EnsureFileAsync(
-        string url, string path, string name, CancellationToken ct)
+        string url, string path, string name, IProgress<string>? progress, CancellationToken ct)
     {
         if (File.Exists(path)) return path;
 
@@ -139,7 +144,7 @@ internal static class WhisperModels
         {
             try
             {
-                await DownloadAsync(url, temp, name, ct);
+                await DownloadAsync(url, temp, name, progress, ct);
                 break;
             }
             catch (Exception e) when (attempt < MaxAttempts && e is not OperationCanceledException)
@@ -163,7 +168,7 @@ internal static class WhisperModels
     }
 
     private static async Task DownloadAsync(
-        string url, string temp, string name, CancellationToken ct)
+        string url, string temp, string name, IProgress<string>? progress, CancellationToken ct)
     {
         // Resume where an interrupted attempt left off.
         var already = File.Exists(temp) ? new FileInfo(temp).Length : 0;
@@ -187,6 +192,9 @@ internal static class WhisperModels
         Console.Error.WriteLine(total > 0
             ? $"downloading {name} — {total / (1024 * 1024)} MB"
             : $"downloading {name}");
+        progress?.Report(total > 0
+            ? $"downloading model — 0% of {total / (1024 * 1024)} MB"
+            : $"downloading model");
 
         await using var source = await response.Content.ReadAsStreamAsync(ct);
         await using var destination = new FileStream(
@@ -200,6 +208,9 @@ internal static class WhisperModels
         var buffer = new byte[81920];
         var written = already;
         var nextReport = written + 32L * 1024 * 1024;
+        // The tray updates far more often than the log: someone watching a menu
+        // wants to see it move, and a line every 32 MB reads as frozen.
+        var nextTrayReport = written + 4L * 1024 * 1024;
 
         while (true)
         {
@@ -219,6 +230,14 @@ internal static class WhisperModels
             await destination.WriteAsync(buffer.AsMemory(0, read), ct);
             written += read;
             stall.CancelAfter(StallTimeout);
+
+            if (written >= nextTrayReport)
+            {
+                progress?.Report(total > 0
+                    ? $"downloading model — {100.0 * written / total:F0}% of {total / (1024 * 1024)} MB"
+                    : $"downloading model — {written / (1024 * 1024)} MB");
+                nextTrayReport += 4L * 1024 * 1024;
+            }
 
             if (written < nextReport) continue;
             Console.Error.WriteLine(total > 0

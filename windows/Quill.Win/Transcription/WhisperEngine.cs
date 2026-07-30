@@ -50,11 +50,12 @@ internal sealed class WhisperEngine : ITranscriptionEngine
     /// and how `vadtest` reports the win.
     public double SecondsSkipped { get; private set; }
 
-    public async Task PrepareAsync(CancellationToken ct = default)
+    public async Task PrepareAsync(
+        IProgress<string>? progress = null, CancellationToken ct = default)
     {
         if (_factory is null)
         {
-            var path = await WhisperModels.EnsureAsync(_type, _quantization, ct);
+            var path = await WhisperModels.EnsureAsync(_type, _quantization, progress, ct);
             // The factory owns the model weights — expensive, loaded once, reused
             // across every track in the queue.
             _factory = WhisperFactory.FromPath(path);
@@ -64,7 +65,8 @@ internal sealed class WhisperEngine : ITranscriptionEngine
         {
             try
             {
-                _vadFactory = WhisperVadFactory.FromPath(await WhisperModels.EnsureVadAsync(ct));
+                _vadFactory = WhisperVadFactory.FromPath(
+                    await WhisperModels.EnsureVadAsync(progress, ct));
             }
             catch (Exception e)
             {

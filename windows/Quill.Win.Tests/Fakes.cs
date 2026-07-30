@@ -44,7 +44,7 @@ internal sealed class FakeEngine : ITranscriptionEngine
     public int PrepareCount { get; private set; }
     public int ReleaseCount { get; private set; }
 
-    public Task PrepareAsync(CancellationToken ct = default)
+    public Task PrepareAsync(IProgress<string>? progress = null, CancellationToken ct = default)
     {
         PrepareCount++;
         return Task.CompletedTask;

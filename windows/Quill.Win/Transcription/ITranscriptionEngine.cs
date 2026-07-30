@@ -15,7 +15,10 @@ internal interface ITranscriptionEngine
     /// Concrete model identifier recorded as transcript.json provenance.
     string Model { get; }
 
-    Task PrepareAsync(CancellationToken ct = default);
+    /// Load the model, downloading it first if needed. `progress` carries
+    /// human-readable status for the tray — the first run pulls hundreds of
+    /// megabytes, and a daemon with no console has nowhere else to say so.
+    Task PrepareAsync(IProgress<string>? progress = null, CancellationToken ct = default);
     Task<IReadOnlyList<TranscriptSegment>> TranscribeAsync(string audioPath, CancellationToken ct = default);
     Task ReleaseAsync();
 }

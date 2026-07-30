@@ -4,7 +4,11 @@ namespace Quill.Transcription;
 
 internal enum StatusKind { Idle, Transcribing, Failed }
 
-internal readonly record struct Status(StatusKind Kind, string Session = "", int Queued = 0);
+/// `Message` carries a sub-status for the tray — currently model-download
+/// progress, which on a first run is hundreds of megabytes with nowhere else to
+/// report itself.
+internal readonly record struct Status(
+    StatusKind Kind, string Session = "", int Queued = 0, string? Message = null);
 
 /// Post-recording pipeline: a serial queue of session folders to transcribe.
 /// mic → "me", system → "them"; each track's segments are shifted by its start
@@ -23,6 +27,7 @@ internal sealed class TranscriptionCoordinator(Func<ITranscriptionEngine> engine
     private readonly List<string> _queue = [];
     private bool _draining;
     private string? _lastFailure;
+    private Status _current;
     private ITranscriptionEngine? _engine;
 
     public Action<Status>? StatusHandler { get; set; }
@@ -97,7 +102,8 @@ internal sealed class TranscriptionCoordinator(Func<ITranscriptionEngine> engine
         while (TryDequeue(out var dir, out var queued))
         {
             var name = SessionName(dir);
-            Publish(new Status(StatusKind.Transcribing, name, queued));
+            _current = new Status(StatusKind.Transcribing, name, queued);
+            Publish(_current);
             try
             {
                 await TranscribeAsync(dir);
@@ -226,7 +232,10 @@ internal sealed class TranscriptionCoordinator(Func<ITranscriptionEngine> engine
         }
 
         var engine = engineFactory();
-        await engine.PrepareAsync();
+        // Model download reports through here so the tray can say what it's
+        // doing; without it the first run looks like a job that hung.
+        await engine.PrepareAsync(
+            new Progress<string>(text => Publish(_current with { Message = text })));
         _engine = engine;
         return engine;
     }

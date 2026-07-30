@@ -355,12 +355,28 @@ skipped second was worth.
 
 ## Packaging
 
+Double-click [`build.cmd`](build.cmd), or:
+
 ```sh
 dotnet publish Quill.Win/Quill.Win.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeAllContentForSelfExtract=true -p:EnableCompressionInSingleFile=true
 ```
 
 One `quill.exe`, ~70 MB, carrying the .NET runtime, WinForms, NAudio and
 whisper.cpp. Nothing to install to run it.
+
+The binary is **not committed**, and shouldn't be: 70 MB per version would sit in
+git history forever, and a binary can't be diffed or reviewed. Built binaries go
+to [Releases](https://github.com/odanielschrage/quill/releases) instead.
+
+Unsigned, so Windows shows *"Windows protected your PC"* on a downloaded copy —
+**More info → Run anyway**. Code signing needs a certificate; not worth it until
+someone other than the author is running this.
+
+First launch after downloading the model is the slow one: the bundle unpacks to a
+temp directory, and the first transcription pulls the Whisper weights. Both are
+one-time, and the model download reports its percentage in the tray menu — a
+`WinExe` has no console to print it to, and without that the first run looks like
+a job that hung.
 
 **`IncludeAllContentForSelfExtract=true` is required, and the obvious flag is the
 wrong one.** `IncludeNativeLibrariesForSelfExtract` bundles the native libraries

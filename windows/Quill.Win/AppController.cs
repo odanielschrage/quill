@@ -142,6 +142,10 @@ internal sealed class AppController : IDisposable
     private void ShowTranscription(Status status) => OnUi(() =>
         _tray.UpdateTranscription(status.Kind switch
         {
+            // A sub-status replaces the generic line: "downloading model — 40%"
+            // is the answer to "why has this been transcribing for ten minutes".
+            StatusKind.Transcribing when status.Message is { } message =>
+                $"{message} · {status.Session}",
             StatusKind.Transcribing when status.Queued > 0 =>
                 $"transcribing {status.Session} · {status.Queued} queued",
             StatusKind.Transcribing => $"transcribing {status.Session}",

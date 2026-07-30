@@ -48,16 +48,27 @@ Silicon recommended for transcription speed.
 
 **Windows**
 
+Download `quill.exe` from [Releases](https://github.com/odanielschrage/quill/releases)
+and run it. There is no installer and no window — it lives in the notification
+area, next to the clock. Optionally `quill install --launch-at-login` afterwards.
+
+The binary is self-contained (~70 MB: it carries the .NET runtime and
+whisper.cpp), so nothing else needs installing. It is not in the repository on
+purpose — 70 MB per version would live in git history forever and can't be
+diffed.
+
+Windows will show *"Windows protected your PC"* the first time, because the
+binary isn't code-signed. **More info → Run anyway.**
+
+To build it yourself instead, double-click [`windows/build.cmd`](windows/build.cmd),
+or:
+
 ```sh
 cd quill/windows
 dotnet publish Quill.Win/Quill.Win.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeAllContentForSelfExtract=true -p:EnableCompressionInSingleFile=true
 ```
 
-Produces one self-contained `quill.exe` (~70 MB — it carries the .NET runtime and
-whisper.cpp). Copy it somewhere stable, then optionally
-`quill install --launch-at-login`. Needs the [.NET 8 SDK](https://dotnet.microsoft.com/download)
-to build; nothing to install to run it.
-
+Needs the [.NET 8 SDK](https://dotnet.microsoft.com/download).
 `IncludeAllContentForSelfExtract` is load-bearing, not decoration — see
 [`windows/README.md`](windows/README.md#packaging).
 
