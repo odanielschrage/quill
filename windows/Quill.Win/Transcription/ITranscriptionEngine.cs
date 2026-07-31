@@ -19,6 +19,11 @@ internal interface ITranscriptionEngine
     /// human-readable status for the tray — the first run pulls hundreds of
     /// megabytes, and a daemon with no console has nowhere else to say so.
     Task PrepareAsync(IProgress<string>? progress = null, CancellationToken ct = default);
-    Task<IReadOnlyList<TranscriptSegment>> TranscribeAsync(string audioPath, CancellationToken ct = default);
+    /// `log` receives per-track diagnostics — what the VAD kept, what it skipped.
+    /// These have to reach the session's transcribe.log rather than stderr: the
+    /// tray daemon is a WinExe with no console, so anything written there is lost
+    /// exactly when someone is trying to work out why a transcript looks wrong.
+    Task<IReadOnlyList<TranscriptSegment>> TranscribeAsync(
+        string audioPath, Action<string>? log = null, CancellationToken ct = default);
     Task ReleaseAsync();
 }

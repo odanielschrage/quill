@@ -57,6 +57,24 @@ that makes the macOS build write a plain LaunchAgent instead of using
 warns if you register a path inside `bin\Debug` or `bin\Release`, which would
 silently stop working the next time the project is cleaned.
 
+### Set the language
+
+`transcription.language` defaults to `auto`, and that default is worth
+overriding. Whisper decides the language from the opening seconds of audio, and
+on a short or noisy start it guesses wrong — a real test opening with *"alô, alô,
+tá me escutando"* came back transcribed as French (`"Allô, allô... et au
+escoutouuuuut"`), and the far-end track as the placeholder `(speaking in foreign
+language)`.
+
+Naming the language removes the guess:
+
+```json
+{ "transcription": { "language": "pt" } }
+```
+
+`quill doctor` says so too when it sees `auto`. The language actually used is
+recorded per track in `transcribe.log`.
+
 ### Echo from the speakers
 
 Recording on speakers rather than headphones means the mic hears the other person

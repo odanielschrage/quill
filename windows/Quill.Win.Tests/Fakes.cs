@@ -51,7 +51,7 @@ internal sealed class FakeEngine : ITranscriptionEngine
     }
 
     public Task<IReadOnlyList<TranscriptSegment>> TranscribeAsync(
-        string audioPath, CancellationToken ct = default)
+        string audioPath, Action<string>? log = null, CancellationToken ct = default)
     {
         var name = Path.GetFileName(audioPath);
         if (ThrowFor.Contains(name)) throw new InvalidOperationException($"bad track {name}");

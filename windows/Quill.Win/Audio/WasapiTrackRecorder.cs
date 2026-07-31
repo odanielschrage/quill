@@ -157,6 +157,22 @@ internal abstract class WasapiTrackRecorder : IAudioRecorder
                     Console.Error.WriteLine(
                         $"{Label}: padded {seconds:F1}s of silence to keep the timeline aligned");
                 }
+
+                // A clipped track transcribes as noise and the transcript gives no
+                // hint why, so this is worth interrupting someone over — it is
+                // usually a fixable level, or acoustic feedback between two
+                // devices in the same room.
+                var clipped = _writer.ClippedFraction;
+                if (clipped > 0.005)
+                {
+                    Console.Error.WriteLine(
+                        $"{Label}: {clipped:P1} of the track clipped — the transcript will suffer");
+                    Notify.User(
+                        $"quill — {Label} audio was too loud",
+                        $"{clipped:P0} of the track clipped; lower the volume, and use headphones "
+                        + "if two devices are in the same room");
+                }
+
                 _writer.Dispose();
                 _writer = null;
             }
