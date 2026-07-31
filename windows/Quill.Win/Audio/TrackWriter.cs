@@ -58,6 +58,22 @@ internal sealed class TrackWriter : IDisposable
     /// and asserted on by the gap tests.
     public long SamplesPadded { get; private set; }
 
+    /// Samples that arrived at or beyond full scale. A clipped track transcribes
+    /// as noise, and the transcript gives no hint why — Whisper just emits
+    /// "(speaking in foreign language)" or nonsense. Worth telling the user
+    /// while they can still fix their levels.
+    public long SamplesClipped { get; private set; }
+
+    /// Fraction of real (non-padded) audio that clipped.
+    public double ClippedFraction
+    {
+        get
+        {
+            var real = _samplesWritten - SamplesPadded;
+            return real <= 0 ? 0 : (double)SamplesClipped / real;
+        }
+    }
+
     public TimeSpan Duration => TimeSpan.FromSeconds((double)_samplesWritten / SampleRate);
 
     public TrackWriter(string path, string label, IMonotonicClock? clock = null)
@@ -149,6 +165,7 @@ internal sealed class TrackWriter : IDisposable
         for (var i = 0; i < mono.Length; i++)
         {
             var value = Math.Clamp(mono[i], -1f, 1f);
+            if (Math.Abs(value) >= 0.999f) SamplesClipped++;
             var sample = (short)(value * short.MaxValue);
             _bytes[i * 2] = (byte)(sample & 0xFF);
             _bytes[i * 2 + 1] = (byte)((sample >> 8) & 0xFF);

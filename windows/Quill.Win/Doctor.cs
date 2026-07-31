@@ -148,10 +148,19 @@ internal static class DoctorReport
         var model = WhisperModels.Resolve(Config.TranscriptionModel());
         var identifier = WhisperModels.Identifier(model, WhisperModels.Quantization);
 
+        var language = Config.TranscriptionLanguage();
         if (WhisperModels.IsCached(model, WhisperModels.Quantization))
         {
+            // Whisper decides the language from the opening seconds, and on a
+            // short or noisy greeting it guesses wrong — "alô, alô, tá me
+            // escutando" came back as French in testing. Naming the language
+            // removes the guess entirely.
+            var hint = language is "auto" or ""
+                ? "set transcription.language (\"pt\", \"en\", …) — auto-detection "
+                  + "misreads short or noisy openings"
+                : null;
             return new Check("transcription", CheckLevel.Ok,
-                $"{identifier} cached · language {Config.TranscriptionLanguage()}");
+                $"{identifier} cached · language {language}", hint);
         }
 
         var needed = WhisperModels.ApproximateSizeMb(model);

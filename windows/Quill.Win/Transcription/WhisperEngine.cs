@@ -79,12 +79,14 @@ internal sealed class WhisperEngine : ITranscriptionEngine
     }
 
     public async Task<IReadOnlyList<TranscriptSegment>> TranscribeAsync(
-        string audioPath, CancellationToken ct = default)
+        string audioPath, Action<string>? log = null, CancellationToken ct = default)
     {
         if (_factory is null) throw new InvalidOperationException("whisper engine used before prepare");
 
         SecondsSkipped = 0;
         EnsureHasAudio(audioPath);
+
+        log?.Invoke($"language {(_language is "auto" or "" ? "auto-detected" : _language)}");
 
         // A processor per track, not per engine. The factory holds the weights,
         // so this is cheap — and it stops whisper's rolling context from bleeding
@@ -96,7 +98,7 @@ internal sealed class WhisperEngine : ITranscriptionEngine
 
         await using var processor = builder.Build();
 
-        return await TranscribeSpeechOnlyAsync(audioPath, processor, ct)
+        return await TranscribeSpeechOnlyAsync(audioPath, processor, log, ct)
                ?? await TranscribeWholeAsync(audioPath, processor, ct);
     }
 
@@ -110,7 +112,7 @@ internal sealed class WhisperEngine : ITranscriptionEngine
     /// with audio in it must never come back with an empty transcript because the
     /// threshold was wrong.
     private async Task<IReadOnlyList<TranscriptSegment>?> TranscribeSpeechOnlyAsync(
-        string audioPath, WhisperProcessor processor, CancellationToken ct)
+        string audioPath, WhisperProcessor processor, Action<string>? log, CancellationToken ct)
     {
         if (_vadFactory is null) return null;
 
@@ -133,23 +135,20 @@ internal sealed class WhisperEngine : ITranscriptionEngine
         }
         catch (Exception e)
         {
-            Console.Error.WriteLine($"warning: VAD failed ({e.Message}) — transcribing whole track");
+            log?.Invoke($"vad failed ({e.Message}) — transcribing whole track");
             return null;
         }
 
         if (regions.Count == 0)
         {
-            Console.Error.WriteLine(
-                $"warning: VAD found no speech in {Path.GetFileName(audioPath)} "
-                + "— transcribing whole track anyway");
+            log?.Invoke("vad found no speech — transcribing whole track anyway");
             return null;
         }
 
         var keptSeconds = regions.Sum(r => r.Duration.TotalSeconds);
         SecondsSkipped = Math.Max(0, trackSeconds - keptSeconds);
-        Console.Error.WriteLine(
-            $"vad: {Path.GetFileName(audioPath)} — {keptSeconds:F1}s of speech in "
-            + $"{trackSeconds:F1}s across {regions.Count} region(s)");
+        log?.Invoke($"vad kept {keptSeconds:F1}s of speech in {trackSeconds:F1}s "
+                    + $"across {regions.Count} region(s)");
 
         var segments = new List<TranscriptSegment>();
         foreach (var region in regions)

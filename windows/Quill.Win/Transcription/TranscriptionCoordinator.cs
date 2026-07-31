@@ -178,7 +178,8 @@ internal sealed class TranscriptionCoordinator(Func<ITranscriptionEngine> engine
             IReadOnlyList<TranscriptSegment> segments;
             try
             {
-                segments = await engine.TranscribeAsync(audio);
+                segments = await engine.TranscribeAsync(
+                    audio, message => Log(dir, $"{track.File}: {message}"));
             }
             catch (Exception e)
             {

@@ -154,6 +154,49 @@ public sealed class TrackWriterTests : IDisposable
         Assert.True(writer.LivenessPeak > 0.2f);
     }
 
+    /// A clipped track transcribes as noise, and the transcript gives no hint
+    /// why — a real Meet test came back reading "(speaking in foreign language)"
+    /// because acoustic feedback between two devices had pinned the system track
+    /// at full scale for five seconds.
+    [Fact]
+    public void ClippingIsCounted()
+    {
+        using var writer = new TrackWriter(Path.Combine(_root, "system.wav"), "system", _clock);
+
+        writer.Write(Level(Rate / 2, 0.3f));   // half a second of healthy audio
+        writer.Write(Level(Rate / 2, 1.0f));   // half a second pinned at full scale
+
+        Assert.Equal(Rate / 2, writer.SamplesClipped);
+        Assert.Equal(0.5, writer.ClippedFraction, precision: 2);
+    }
+
+    [Fact]
+    public void HealthyAudioIsNeverFlaggedAsClipped()
+    {
+        using var writer = new TrackWriter(Path.Combine(_root, "mic.wav"), "mic", _clock);
+
+        writer.Write(Level(Rate, 0.95f));
+
+        Assert.Equal(0, writer.SamplesClipped);
+        Assert.Equal(0.0, writer.ClippedFraction);
+    }
+
+    /// Inserted silence is not audio the user recorded, so it must not dilute the
+    /// ratio the clipping warning is judged on.
+    [Fact]
+    public void PaddedSilenceIsExcludedFromTheClippedFraction()
+    {
+        using var writer = new TrackWriter(Path.Combine(_root, "system.wav"), "system", _clock);
+
+        Play(writer, TimeSpan.FromSeconds(1));   // 0.5 amplitude, no clipping
+        Idle(TimeSpan.FromSeconds(60));          // a minute of ledger padding
+        writer.Write(Level(Rate, 1.0f));         // a second at full scale
+
+        // One clipped second out of two real seconds, not out of sixty-two.
+        Assert.True(writer.ClippedFraction > 0.4,
+            $"expected roughly half, got {writer.ClippedFraction:P1}");
+    }
+
     [Fact]
     public void OutOfRangeSamplesClampInsteadOfWrapping()
     {
