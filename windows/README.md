@@ -247,6 +247,29 @@ macOS build gets for free had to be built here:
   notification area has no room for inline text next to the icon.
 - **Left-click opens the menu.** Windows only does that on right-click by
   default; macOS opens on any click.
+- **Configuration is reachable from the menu.** macOS installs via `swift build`,
+  so its audience is already in a terminal and a JSON file in `~/.config` fits.
+  Windows users download an `.exe` and double-click; a setting they can't
+  discover may as well not exist.
+
+*Language* is a submenu, and it is the only setting that gets one: a wrong value
+there produces silently useless output — a Portuguese meeting transcribed as
+French reads like nonsense with no clue why — while model affects speed
+visibly, VAD and echo suppression have safe defaults, and `on_stop` is for
+someone already in a terminal. A code typed into the file by hand (`ja`, `ru`)
+appears in the menu ticked rather than being ignored.
+
+*Open config file…* opens the JSON in whatever edits it, creating a commented
+starter the first time. That template is the discovery mechanism for everything
+the submenu deliberately doesn't expose.
+
+Changing the language from the menu **rewrites the file and strips comments** —
+System.Text.Json can't round-trip them. Every other key survives. If you annotate
+your config, edit the file instead. A config that doesn't parse is refused rather
+than replaced, so a stray comma costs you a menu click, not your settings.
+
+There is no Settings dialog and there shouldn't be: every key would become UI to
+maintain, and the truth would live in two places.
 
 Notifications are `ShowBalloonTip`. A real WinRT toast would need an AUMID and a
 Start Menu shortcut — precisely the app bundle this project refuses to become —
