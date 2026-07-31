@@ -146,4 +146,33 @@ public sealed class ConfigWriteTests : IDisposable
 
         Assert.Equal(_path, Config.PathToWrite());
     }
+
+    /// Regression, and it cost a real config to find. ExistingPath() returns null
+    /// for an override pointing at a file that doesn't exist yet — correct when
+    /// reading, wrong when writing. PathToWrite used to fall back to the native
+    /// location, so anyone with a second profile got their config created
+    /// somewhere else entirely and the override silently ignored.
+    [Fact]
+    public void AnOverrideIsHonouredEvenBeforeTheFileExists()
+    {
+        Assert.False(File.Exists(_path));
+
+        Assert.Equal(_path, Config.PathToWrite());
+
+        Config.EnsureExists();
+        Assert.True(File.Exists(_path));
+    }
+
+    /// Belt and braces after the above: nothing this suite writes may land
+    /// outside its temp directory, whatever the code under test decides.
+    [Fact]
+    public void NoWriteEverEscapesTheTestDirectory()
+    {
+        Assert.StartsWith(_root, Config.PathToWrite(), StringComparison.OrdinalIgnoreCase);
+
+        Config.SetTranscription("language", "pt");
+        Config.EnsureExists();
+
+        Assert.StartsWith(_root, Config.PathToWrite(), StringComparison.OrdinalIgnoreCase);
+    }
 }
