@@ -32,8 +32,11 @@ internal sealed class AppController : IDisposable
 
         _tray.OnToggle = Toggle;
         _tray.OnOpenFolder = OpenFolder;
+        _tray.OnOpenConfig = OpenConfig;
+        _tray.OnLanguageChosen = ChooseLanguage;
         _tray.OnQuit = Shutdown;
         _tray.Update(recording: false, elapsed: null);
+        _tray.SetLanguage(Config.TranscriptionLanguage());
 
         Notify.Handler = (title, body) => OnUi(() => _tray.Balloon(title, body));
         _ticker.Tick += (_, _) => Tick();
@@ -166,6 +169,63 @@ internal sealed class AppController : IDisposable
         var session = _session;
         if (session is null) return;
         _tray.Update(recording: true, elapsed: Format(DateTimeOffset.Now - session.StartedAt));
+    }
+
+    /// Open the config in whatever the user edits JSON with, creating a
+    /// commented starter if they've never had one. Notepad is the fallback: a
+    /// .json association pointing at a browser would open it read-only, which is
+    /// worse than plain.
+    private void OpenConfig()
+    {
+        string path;
+        try
+        {
+            path = Config.EnsureExists();
+        }
+        catch (Exception e)
+        {
+            Console.Error.WriteLine($"couldn't create config: {e.Message}");
+            Notify.User("quill — couldn't open the config", e.Message);
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        }
+        catch (Exception)
+        {
+            try
+            {
+                Process.Start("notepad.exe", $"\"{path}\"");
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine($"couldn't open {path}: {e.Message}");
+                Notify.User("quill — couldn't open the config", path);
+            }
+        }
+    }
+
+    /// Write the chosen language back to the config. It takes effect on the next
+    /// transcription — Config re-reads the file per access, and the engine is
+    /// built per drain — so nothing needs restarting.
+    private void ChooseLanguage(string code)
+    {
+        try
+        {
+            Config.SetTranscription("language", code);
+            _tray.SetLanguage(code);
+            Console.Error.WriteLine($"language set to {code}");
+            Notify.User("quill — language set", $"transcribing in \"{code}\" from now on");
+        }
+        catch (Exception e)
+        {
+            // Most likely a config the user broke by hand; say so rather than
+            // overwriting whatever is still in there.
+            Console.Error.WriteLine($"couldn't set language: {e.Message}");
+            Notify.User("quill — couldn't change the language", e.Message);
+        }
     }
 
     private void OpenFolder()

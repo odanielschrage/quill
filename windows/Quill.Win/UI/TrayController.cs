@@ -13,11 +13,27 @@ internal sealed class TrayController : IDisposable
     private readonly ToolStripMenuItem _state;
     private readonly ToolStripMenuItem _transcription;
     private readonly ToolStripMenuItem _toggle;
+    private readonly ToolStripMenuItem _language;
     private readonly Icon _idleIcon;
     private readonly Icon _recordingIcon;
 
+    /// A short list, not Whisper's ninety-nine. Anything else can be typed into
+    /// the config file, and a code set that way still shows up checked here.
+    private static readonly (string Code, string Label)[] Languages =
+    [
+        ("auto", "Detect automatically"),
+        ("pt", "Português"),
+        ("en", "English"),
+        ("es", "Español"),
+        ("fr", "Français"),
+        ("de", "Deutsch"),
+        ("it", "Italiano"),
+    ];
+
     public Action? OnToggle { get; set; }
     public Action? OnOpenFolder { get; set; }
+    public Action? OnOpenConfig { get; set; }
+    public Action<string>? OnLanguageChosen { get; set; }
     public Action? OnQuit { get; set; }
 
     public TrayController()
@@ -31,6 +47,15 @@ internal sealed class TrayController : IDisposable
 
         var openFolder = new ToolStripMenuItem(
             "Open recordings folder", null, (_, _) => OnOpenFolder?.Invoke());
+
+        // Language earns a menu of its own because it is the one setting whose
+        // wrong value produces silently useless output — a Portuguese meeting
+        // transcribed as French reads like nonsense with no clue why. Everything
+        // else is discoverable from the config file.
+        _language = new ToolStripMenuItem("Language");
+        var openConfig = new ToolStripMenuItem(
+            "Open config file…", null, (_, _) => OnOpenConfig?.Invoke());
+
         var quit = new ToolStripMenuItem("Quit quill", null, (_, _) => OnQuit?.Invoke());
 
         _menu = new ContextMenuStrip();
@@ -41,8 +66,15 @@ internal sealed class TrayController : IDisposable
             _toggle,
             openFolder,
             new ToolStripSeparator(),
+            _language,
+            openConfig,
+            new ToolStripSeparator(),
             quit,
         ]);
+
+        // The file can change under us — someone edits it, or a second profile
+        // via QUILL_CONFIG. Re-read on open so the tick is never stale.
+        _menu.Opening += (_, _) => SetLanguage(Config.TranscriptionLanguage());
 
         _icon = new NotifyIcon
         {
@@ -72,6 +104,34 @@ internal sealed class TrayController : IDisposable
         _icon.Icon = recording ? _recordingIcon : _idleIcon;
         // NotifyIcon.Text is capped at 63 characters.
         _icon.Text = recording ? $"quill · recording {elapsed ?? "0:00"}" : "quill";
+    }
+
+    /// Rebuild the language menu with `current` ticked.
+    ///
+    /// A code the user typed into the config by hand — "ru", "ja" — is appended
+    /// rather than ignored, so the menu always shows the truth instead of
+    /// silently ticking nothing.
+    public void SetLanguage(string current)
+    {
+        // Rebuilt on every menu open, so the old items have to go with it:
+        // Clear() detaches without disposing, and this daemon stays up for days.
+        foreach (ToolStripItem stale in _language.DropDownItems) stale.Dispose();
+        _language.DropDownItems.Clear();
+
+        var known = Languages.Any(l =>
+            string.Equals(l.Code, current, StringComparison.OrdinalIgnoreCase));
+        var entries = known ? Languages : [.. Languages, (current, current)];
+
+        foreach (var (code, label) in entries)
+        {
+            var item = new ToolStripMenuItem(
+                label, null, (_, _) => OnLanguageChosen?.Invoke(code))
+            {
+                Checked = string.Equals(code, current, StringComparison.OrdinalIgnoreCase),
+                CheckOnClick = false,
+            };
+            _language.DropDownItems.Add(item);
+        }
     }
 
     /// Show transcription progress or failure as a second status line; null

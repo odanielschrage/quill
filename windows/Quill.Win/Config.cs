@@ -136,6 +136,126 @@ internal static class Config
         return expanded;
     }
 
+    /// The file a write lands in.
+    ///
+    /// An explicit QUILL_CONFIG wins even when that file doesn't exist yet —
+    /// ExistingPath() deliberately returns null for a missing override, which is
+    /// right for reading and wrong for writing: falling back would create a
+    /// config at the native path and quietly ignore the override the user asked
+    /// for. Otherwise it's whichever config is already in use, because writing to
+    /// the primary path while one sits in ~/.config would shadow it silently.
+    public static string PathToWrite()
+    {
+        var overridePath = Environment.GetEnvironmentVariable(PathVariable);
+        if (!string.IsNullOrEmpty(overridePath)) return ExpandPath(overridePath);
+        return ExistingPath() ?? PrimaryPath;
+    }
+
+    /// Create the config with a commented starter if none exists, and return the
+    /// path either way. The comments are the point — the tray menu opens this
+    /// file, and someone who has never seen it needs to learn what can go in it.
+    public static string EnsureExists()
+    {
+        if (ExistingPath() is { } existing) return existing;
+
+        var path = PathToWrite();
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, Template, Json.Utf8NoBom);
+        return path;
+    }
+
+    /// Change one setting, preserving every other key in the file.
+    ///
+    /// Comments do not survive this. The parser accepts them but System.Text.Json
+    /// cannot round-trip them, so anyone who annotates their config by hand
+    /// should edit the file rather than use the menu — which is exactly why the
+    /// menu offers to open it.
+    public static void Update(Action<JsonObject> mutate)
+    {
+        var path = PathToWrite();
+        var root = Load();
+
+        // A config that exists but doesn't parse must never be silently replaced
+        // with a fresh one — that would throw away settings the user can still
+        // rescue by fixing a stray comma.
+        if (root is null && File.Exists(path))
+        {
+            throw new InvalidOperationException(
+                $"{path} is not valid JSON — fix it by hand before changing settings here");
+        }
+
+        root ??= new JsonObject();
+        mutate(root);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var json = root.ToJsonString(new System.Text.Json.JsonSerializerOptions
+        {
+            WriteIndented = true,
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        });
+
+        // Temp then rename, so an interrupted write can't leave a truncated
+        // config that stops quill reading any of its settings.
+        var temp = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllText(temp, json + Environment.NewLine, Json.Utf8NoBom);
+            File.Move(temp, path, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(temp); } catch { /* best effort */ }
+            throw;
+        }
+    }
+
+    /// Set one key inside the "transcription" object, creating it if absent.
+    public static void SetTranscription(string key, string value) => Update(root =>
+    {
+        if (root["transcription"] is not JsonObject transcription)
+        {
+            transcription = [];
+            root["transcription"] = transcription;
+        }
+        transcription[key] = value;
+    });
+
+    private const string Template = """
+        {
+          // Where sessions land. --out overrides this.
+          // "recordings_dir": "~/Recordings",
+
+          "transcription": {
+            // false to record without transcribing.
+            "enabled": true,
+
+            // Spoken language: "pt", "en", "es", … or "auto".
+            // Naming it is worth doing — auto-detection reads only the opening
+            // seconds and misjudges a short or noisy start.
+            "language": "auto",
+
+            // tiny · base · small · medium · large-v3-turbo
+            // Bigger is more accurate and much slower. Run `quill bench` before
+            // assuming; on a slow machine "base" is often the right answer.
+            "model": "small",
+
+            // Skip silence before transcribing. Also stops Whisper inventing
+            // content in long quiet stretches.
+            "vad": true,
+
+            // Drop mic segments that are just the far end coming back through
+            // the speakers. Every removal is logged in the session's
+            // transcribe.log.
+            "echo_suppression": true
+          },
+
+          // Command run with the session folder as its argument, after the
+          // transcript is written. Wire it to summarising, filing, indexing.
+          // "on_stop": "python summarise.py"
+        }
+
+        """;
+
     // MARK: -
 
     private static JsonObject? Transcription() => Load()?["transcription"] as JsonObject;
