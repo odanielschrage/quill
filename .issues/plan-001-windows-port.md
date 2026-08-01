@@ -385,6 +385,31 @@ dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
 - AEC no caminho do áudio via Voice Capture DSP: não implementado, e provavelmente
   desnecessário agora. Fica como opção se a supressão no transcript se mostrar
   insuficiente em uso real.
+
+- **Diarização de múltiplos participantes: avaliada e adiada (2026-08-01).**
+
+  Com 3+ pessoas, todos do lado remoto saem como um único `them`. É estrutural: a
+  plataforma da reunião mistura os participantes num só fluxo antes de chegar ao
+  dispositivo de áudio. Captura por processo também não resolveria — daria "o
+  navegador", não "Maria".
+
+  Três caminhos foram considerados:
+
+  1. **Atribuição por contexto**, via `on_stop` — custo zero de código e entrega
+     **nomes reais**, porque as pessoas se chamam pelo nome em reunião. Rompe o
+     "nada sai da máquina" se usar API externa.
+  2. **Diarização local** com sherpa-onnx (`pyannote-segmentation-3.0` + CAM++,
+     ambos ONNX, API C# disponível). Fica no `system.wav` e rotula `them-1`,
+     `them-2`. Custos: ~35 MB de modelos, outro passe de CPU numa máquina que já é
+     o gargalo, clusters **anônimos**, e degradação severa com fala sobreposta e
+     turnos curtos — exatamente o que reuniões têm. O campo `speaker` passaria a
+     divergir do macOS.
+  3. **Documentar e não mudar** — escolhido.
+
+  **Motivo da escolha:** a diarização de duas partes ainda não foi validada uma
+  única vez numa call real. Construir clustering sobre uma base não verificada é
+  construir na areia, e a call real ainda pode mostrar que o caminho 1 basta.
+  Reavaliar depois de uso real acumulado.
 - Aceleração por iGPU (OpenVINO/DirectML).
 - Motor Parakeet via `org.k2fsa.sherpa.onnx` para paridade em inglês — requer spike
   antes: os docs C# não confirmam timestamps por palavra em modelos NeMo transducer.
