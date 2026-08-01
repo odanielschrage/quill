@@ -97,6 +97,25 @@ Two tracks on purpose: speech models do better on clean single-source audio,
 and mic-vs-system is free two-party diarization — `me` vs `them` with no
 speaker-identification model.
 
+**Two parties is the whole of it.** In a call with three or more people,
+everyone on the far end arrives as one `them`. This is structural rather than a
+gap to be patched: the meeting platform mixes every remote participant into a
+single stream before it ever reaches the audio device, so no amount of cleverness
+at capture time can pull them apart — not even per-process capture, which would
+yield "the browser", not "Maria".
+
+Separating them afterwards would mean running speaker diarization over the system
+track, which clusters voices anonymously (`them-1`, `them-2`) rather than naming
+them, costs another model and another pass over the audio, and degrades on
+exactly what meetings are full of: overlapping speech and short turns. Real names
+would need to come from the meeting platform, which is a different program to the
+one this is.
+
+For a multi-party call the transcript is still a complete, correctly timed record
+with your own side separated — and whatever consumes it downstream through
+`on_stop` can often attribute the rest from context, since people address each
+other by name.
+
 Crash-tolerance on purpose too, by different means. CAF needs no finalization
 pass, so if the process dies mid-meeting everything already written is still
 readable. WAV can't do that, but a truncated one is recoverable by rebuilding its
@@ -207,6 +226,9 @@ The Windows build carries a few extra dev harnesses — `bench`, `gaptest`,
 - A global tap records *everything* the machine plays — notification dings,
   music, all of it. Don't play Spotify during meetings (or ask for a
   per-process picker if it bothers you).
+- Three or more people in a call means everyone on the far end is tagged `them`.
+  See *Two parties is the whole of it* above — the platform mixes them before the
+  audio ever reaches quill.
 - Parakeet v2 is English-only, so the macOS build is too. Use the Windows build,
   or wait for a Whisper engine on macOS, for other languages.
 - **macOS:** if recordings come out silent, check System Settings → Privacy &
