@@ -187,6 +187,12 @@ internal sealed class TranscriptionCoordinator(Func<ITranscriptionEngine> engine
                 continue;
             }
 
+            // Per track, before the merge: a hallucination loop is only visible
+            // as consecutive segments, and interleaving the two tracks would
+            // separate a run with the other speaker's words.
+            segments = TranscriptCleaner.Clean(
+                segments, message => Log(dir, $"{track.File}: {message}"));
+
             var offset = TimeSpan.FromMilliseconds(track.OffsetMs);
             merged.AddRange(segments.Select(s => new Transcript.Segment
             {
