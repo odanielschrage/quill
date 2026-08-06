@@ -111,6 +111,37 @@ Deliberately conservative, because dropping something real is the worse error:
 Nothing is marked in `transcript.json` — dropping keeps the on-disk contract
 identical to the macOS build's, and the log carries the audit trail instead.
 
+### Whisper's own artefacts
+
+On marginal audio Whisper reliably produces two kinds of junk, and both showed up
+in a real 26-minute call: non-speech markers (`[MÚSICA]`, `[SOM DE CRIANÇA]`,
+`(speaking in foreign language)`) and hallucination loops — one invented sentence
+repeated four times in as many seconds. Neither is a quill bug; both are junk in a
+meeting transcript.
+
+[`TranscriptCleaner`](Quill.Win/Transcription/TranscriptCleaner.cs) strips them,
+per track and before the merge, because a repeat is only visible as *consecutive*
+segments and interleaving the two tracks would separate a run.
+
+- A segment that is **entirely** a bracketed marker is dropped. `[VITOR] - Valeu,
+  peri.` is not — the label is invented but the words after it usually aren't, so
+  the prefix goes and the speech stays.
+- A run of identical consecutive segments collapses when it is **three or more**,
+  or when the phrase is **four words or longer**. That separates the model looping
+  from a person repeating themselves: `"não"` twice in a row survives, because
+  deleting a real one is the worse error.
+- The survivor does **not** inherit the run's later timestamps. The audio under a
+  hallucinated repeat probably wasn't speech, and stretching the segment over it
+  would claim someone spoke for seconds they didn't.
+
+Measured on that 26-minute call: 270 segments → 258, removing nine markers, one
+invented speaker label and three looped repeats, while leaving the genuine
+repeated fillers alone. Every removal is written to `transcribe.log`.
+
+`quill clean <session>` re-runs it over a transcript that already exists, so a
+40-minute transcription doesn't have to happen again. It reports by default and
+only rewrites with `--write`.
+
 ## doctor
 
 The checks barely overlap with the macOS ones.

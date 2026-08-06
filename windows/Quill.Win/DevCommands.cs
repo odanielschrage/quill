@@ -15,7 +15,75 @@ namespace Quill;
 internal static class DevCommands
 {
     private static readonly string[] Names =
-        ["record", "transcribe", "gaptest", "bench", "icons", "vadtest", "devicetest", "status"];
+        ["record", "transcribe", "gaptest", "bench", "icons", "vadtest", "devicetest", "clean",
+         "status"];
+
+    /// Re-run the hallucination filter over a transcript that already exists, so
+    /// a 40-minute transcription doesn't have to happen again to benefit from it.
+    ///
+    /// Reports by default and only rewrites with --write: this edits a file the
+    /// user may already have read and acted on.
+    private static int Clean(string sessionDir, bool write)
+    {
+        var path = Path.Combine(sessionDir, "transcript.json");
+        if (!File.Exists(path))
+        {
+            Console.Error.WriteLine($"no transcript.json in {sessionDir}");
+            return 64;
+        }
+
+        var doc = System.Text.Json.JsonSerializer.Deserialize<Transcript>(
+            File.ReadAllText(path), Json.Options);
+        if (doc is null)
+        {
+            Console.Error.WriteLine($"couldn't parse {path}");
+            return 1;
+        }
+
+        // Clean per speaker, matching how it runs in the pipeline: a repeat is
+        // only visible as consecutive segments within one track.
+        var cleaned = new List<Transcript.Segment>();
+        foreach (var speaker in doc.Segments.Select(s => s.Speaker).Distinct())
+        {
+            var track = doc.Segments.Where(s => s.Speaker == speaker).ToList();
+            var asSegments = track
+                .Select(s => new TranscriptSegment(
+                    TimeSpan.FromMilliseconds(s.StartMs),
+                    TimeSpan.FromMilliseconds(s.EndMs),
+                    s.Text))
+                .ToList();
+
+            var result = TranscriptCleaner.Clean(asSegments, Console.WriteLine);
+            cleaned.AddRange(result.Select(s => new Transcript.Segment
+            {
+                Speaker = speaker,
+                StartMs = (int)s.Start.TotalMilliseconds,
+                EndMs = (int)s.End.TotalMilliseconds,
+                Text = s.Text,
+            }));
+        }
+
+        var ordered = cleaned.OrderBy(s => s.StartMs).ToList();
+        Console.WriteLine();
+        Console.WriteLine($"  {doc.Segments.Count} segments → {ordered.Count} "
+                          + $"({doc.Segments.Count - ordered.Count} removed)");
+
+        if (!write)
+        {
+            Console.WriteLine("  (report only — pass --write to rewrite the transcript)");
+            return 0;
+        }
+
+        new Transcript
+        {
+            CreatedAt = doc.CreatedAt,
+            Engine = doc.Engine,
+            Model = doc.Model,
+            Segments = ordered,
+        }.Write(sessionDir);
+        Console.WriteLine($"  rewritten: {path}");
+        return 0;
+    }
 
     public static bool Handles(string command) => Names.Contains(command);
 
@@ -26,6 +94,7 @@ internal static class DevCommands
         ["gaptest", ..] => GapTest(),
         ["bench", var audio, ..] => await BenchAsync(audio, args.Length > 2 ? args[2] : null),
         ["icons", var dir, ..] => DumpIcons(dir),
+        ["clean", var session, ..] => Clean(session, args.Contains("--write")),
         ["vadtest", var speech, ..] => await VadTestAsync(speech),
         ["devicetest", ..] => DeviceTest(),
         _ => Status(),
