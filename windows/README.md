@@ -111,6 +111,38 @@ Deliberately conservative, because dropping something real is the worse error:
 Nothing is marked in `transcript.json` — dropping keeps the on-disk contract
 identical to the macOS build's, and the log carries the audit trail instead.
 
+#### Measured on a real call
+
+A 91-minute three-way meeting recorded with an external condenser mic and
+speakers — the setup this exists for, and the one where bleed is worst. Removals
+were checked against the audio itself: a removal is right if the far end was
+audibly playing at that moment, wrong if only the mic was active.
+
+| | removals | correct |
+|---|---|---|
+| containment alone | 425 | 99% |
+| + the two rules below | 466 | 98% |
+
+Precision was never the problem. Recall was, and it leaked two ways:
+
+- **A degraded copy.** The mic's transcription of the far end is the worse one:
+  the same call rendered "mentoria" as "notoria". Tokens now match when they are
+  close in length and within a proportional edit distance. The length guard is
+  what stops "OIBI" being equated with "Ovidinho" — that is a genuine mishearing,
+  not a spelling wobble, and three edits in eight letters is where the line sits.
+- **The length floor.** "Mentoria, certificação" leaked as the speaker's own
+  words while the far end said exactly that, because two tokens is under the
+  floor that protects "sim" and "ok". A segment now drops below the floor when it
+  appears *word for word* inside far-end speech that was playing across at least
+  half of it. The coverage requirement is doing real work: without it the same
+  rule also removed "Ah, legal." and "E aí?" said in gaps, and precision fell to
+  93%.
+
+One token is still never enough, whatever the match.
+
+`quill clean` re-runs this too, so a transcript that already exists benefits
+without re-transcribing — which for that meeting would have meant another 2h43.
+
 ### Whisper's own artefacts
 
 On marginal audio Whisper reliably produces two kinds of junk, and both showed up

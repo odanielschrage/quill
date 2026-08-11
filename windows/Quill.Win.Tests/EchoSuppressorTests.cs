@@ -158,6 +158,112 @@ public sealed class EchoSuppressorTests
         Assert.Equal([0, 2000, 4000], kept.Select(s => s.StartMs));
     }
 
+    // The cases below are lifted from a 91-minute three-way call recorded with an
+    // external condenser mic and speakers — the setup this feature exists for.
+
+    /// Escaped in that call. The mic's copy of the far end came back degraded:
+    /// "mentoria" as "notoria", so exact token matching scored it as the
+    /// speaker's own words.
+    [Fact]
+    public void ADegradedCopyOfTheFarEndIsCaught()
+    {
+        var kept = EchoSuppressor.Apply([
+            Seg("them", 671_000, 676_000,
+                "Mas é só uma coisa. A questão da mentoria, da certificação, ela é separada."),
+            Seg("me", 672_300, 677_000,
+                "Mas é só uma coisa. A questão da notoria, da certificação, ela é separada."),
+        ]);
+
+        Assert.Single(kept);
+        Assert.Equal("them", kept[0].Speaker);
+    }
+
+    /// Also escaped, for the opposite reason: an exact duplicate of two words,
+    /// held back by the length floor that protects "sim" and "ok".
+    [Fact]
+    public void AShortVerbatimQuoteOfTheFarEndIsCaught()
+    {
+        var kept = EchoSuppressor.Apply([
+            Seg("them", 761_000, 763_000, "Mentoria, certificação."),
+            Seg("me", 761_900, 763_500, "Mentoria, certificação"),
+        ]);
+
+        Assert.Single(kept);
+        Assert.Equal("them", kept[0].Speaker);
+    }
+
+    /// A single word is still never enough. The far end saying "sim" while you
+    /// also say "sim" is a conversation, not an echo.
+    [Fact]
+    public void OneWordIsNeverEnoughEvenVerbatim()
+    {
+        var kept = EchoSuppressor.Apply([
+            Seg("them", 644_000, 645_000, "Sim."),
+            Seg("me", 644_300, 645_200, "Sim"),
+        ]);
+
+        Assert.Equal(2, kept.Count);
+    }
+
+    /// From the same call, and the reason precision matters more than recall:
+    /// this is the speaker explaining something while the far end murmurs
+    /// agreement. It must survive.
+    [Fact]
+    public void RealSpeechOverAnAcknowledgementSurvives()
+    {
+        var kept = EchoSuppressor.Apply([
+            Seg("them", 644_000, 645_000, "Sim."),
+            Seg("me", 644_300, 647_000,
+                "Porque nem sempre as pessoas respondem certinho, né?"),
+        ]);
+
+        Assert.Equal(2, kept.Count);
+    }
+
+    /// The guard that keeps fuzzy matching honest, and where its line actually
+    /// falls. Fuzzy matching is for spelling wobbles of one or two edits, not for
+    /// rescuing a mishearing: "Ovidinho" heard as "OIBI" is four edits, and
+    /// "mentoria" heard as "notoria" is three. Both stay unmatched here on
+    /// purpose — widening the budget far enough to catch them would also start
+    /// equating "campanha" with "campinas".
+    ///
+    /// The degraded-copy case is still caught, just by the other rule: one wrong
+    /// word out of fourteen leaves containment well above the threshold. See
+    /// ADegradedCopyOfTheFarEndIsCaught.
+    [Fact]
+    public void AGenuineMishearingIsNotTreatedAsTheSameWord()
+    {
+        Assert.False(EchoSuppressor.NearlySame("oibi", "ovidinho"));
+        Assert.False(EchoSuppressor.NearlySame("notoria", "mentoria"));
+        Assert.False(EchoSuppressor.NearlySame("campanha", "campinas"));
+    }
+
+    [Theory]
+    [InlineData("não", "nós")]      // too short to risk
+    [InlineData("mais", "mas")]     // one is below the length floor
+    [InlineData("falar", "falou")]  // two edits in a five-letter word
+    public void ShortOrDistinctWordsNeverMatchFuzzily(string a, string b) =>
+        Assert.False(EchoSuppressor.NearlySame(a, b));
+
+    [Theory]
+    [InlineData("certo", "certa")]
+    [InlineData("mentoria", "mentoría")]
+    [InlineData("agendamento", "agendamentos")]
+    public void SpellingWobblesOfTheSameWordMatch(string a, string b) =>
+        Assert.True(EchoSuppressor.NearlySame(a, b));
+
+    /// Fuzzy matching must not manufacture agreement out of unrelated speech.
+    [Fact]
+    public void FuzzyMatchingDoesNotCollapseDifferentSentences()
+    {
+        var kept = EchoSuppressor.Apply([
+            Seg("them", 0, 5000, "então vamos revisar o andamento das campanhas hoje"),
+            Seg("me", 500, 5500, "prefiro começar pelo relatório financeiro do trimestre"),
+        ]);
+
+        Assert.Equal(2, kept.Count);
+    }
+
     [Fact]
     public void TokenizerKeepsAccentsAndDropsPunctuation() =>
         Assert.Equal(
