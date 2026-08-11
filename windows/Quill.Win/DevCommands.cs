@@ -64,9 +64,17 @@ internal static class DevCommands
         }
 
         var ordered = cleaned.OrderBy(s => s.StartMs).ToList();
+
+        // Echo suppression runs here too, so improvements to it reach a
+        // transcript that already exists. It only ever removes, so re-running it
+        // over an already-suppressed transcript is safe.
+        var afterEcho = EchoSuppressor.Apply(ordered, Console.WriteLine);
+
         Console.WriteLine();
-        Console.WriteLine($"  {doc.Segments.Count} segments → {ordered.Count} "
-                          + $"({doc.Segments.Count - ordered.Count} removed)");
+        Console.WriteLine($"  {doc.Segments.Count} segments → {afterEcho.Count} "
+                          + $"({doc.Segments.Count - ordered.Count} hallucinated, "
+                          + $"{ordered.Count - afterEcho.Count} echoed)");
+        ordered = afterEcho;
 
         if (!write)
         {
