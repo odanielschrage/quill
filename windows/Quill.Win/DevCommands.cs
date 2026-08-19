@@ -18,11 +18,18 @@ internal static class DevCommands
         ["record", "transcribe", "gaptest", "bench", "icons", "vadtest", "devicetest", "clean",
          "status"];
 
-    /// Re-run the hallucination filter over a transcript that already exists, so
-    /// a 40-minute transcription doesn't have to happen again to benefit from it.
+    /// Re-run the hallucination filter and echo suppression over a transcript
+    /// that already exists, so a 40-minute transcription doesn't have to happen
+    /// again to benefit from an improvement.
     ///
     /// Reports by default and only rewrites with --write: this edits a file the
     /// user may already have read and acted on.
+    ///
+    /// A rewrite is recorded in the session's transcribe.log. Without that the
+    /// folder contradicts itself — the log ends "done — 1817 segments" while the
+    /// transcript holds 1707, with nothing to say why. Console output is no
+    /// substitute: the tray daemon is a WinExe launched from Explorer, so stdout
+    /// goes nowhere.
     private static int Clean(string sessionDir, bool write)
     {
         var path = Path.Combine(sessionDir, "transcript.json");
@@ -40,6 +47,15 @@ internal static class DevCommands
             return 1;
         }
 
+        // Buffered rather than written straight through: a removal is only worth
+        // recording once the rewrite it describes has actually happened.
+        var removals = new List<string>();
+        void Record(string message)
+        {
+            Console.WriteLine(message);
+            removals.Add(message);
+        }
+
         // Clean per speaker, matching how it runs in the pipeline: a repeat is
         // only visible as consecutive segments within one track.
         var cleaned = new List<Transcript.Segment>();
@@ -53,7 +69,7 @@ internal static class DevCommands
                     s.Text))
                 .ToList();
 
-            var result = TranscriptCleaner.Clean(asSegments, Console.WriteLine);
+            var result = TranscriptCleaner.Clean(asSegments, Record);
             cleaned.AddRange(result.Select(s => new Transcript.Segment
             {
                 Speaker = speaker,
@@ -68,7 +84,7 @@ internal static class DevCommands
         // Echo suppression runs here too, so improvements to it reach a
         // transcript that already exists. It only ever removes, so re-running it
         // over an already-suppressed transcript is safe.
-        var afterEcho = EchoSuppressor.Apply(ordered, Console.WriteLine);
+        var afterEcho = EchoSuppressor.Apply(ordered, Record);
 
         Console.WriteLine();
         Console.WriteLine($"  {doc.Segments.Count} segments → {afterEcho.Count} "
@@ -82,6 +98,14 @@ internal static class DevCommands
             return 0;
         }
 
+        if (removals.Count == 0)
+        {
+            // Rewriting an unchanged transcript only moves its timestamp, which
+            // makes the folder look edited when nothing was.
+            Console.WriteLine("  nothing to remove — transcript left untouched");
+            return 0;
+        }
+
         new Transcript
         {
             CreatedAt = doc.CreatedAt,
@@ -90,7 +114,37 @@ internal static class DevCommands
             Segments = ordered,
         }.Write(sessionDir);
         Console.WriteLine($"  rewritten: {path}");
+
+        AppendToSessionLog(sessionDir, removals,
+            $"re-cleaned: {doc.Segments.Count} segments → {ordered.Count}");
         return 0;
+    }
+
+    /// Append what a rewrite removed to the session's transcribe.log, in the same
+    /// shape the transcription pipeline writes, so the folder reads as one
+    /// history rather than two that disagree.
+    private static void AppendToSessionLog(
+        string sessionDir, IReadOnlyList<string> removals, string summary)
+    {
+        var log = Path.Combine(sessionDir, "transcribe.log");
+        var stamp = Json.Iso8601(DateTimeOffset.Now);
+        var lines = new StringBuilder();
+        // LF rather than AppendLine: the pipeline writes this log with
+        // "\n" and a mixed-ending file is a nuisance to read.
+        foreach (var removal in removals) lines.Append($"{stamp} {removal}\n");
+        lines.Append($"{stamp} {summary}\n");
+
+        try
+        {
+            File.AppendAllText(log, lines.ToString(), Json.Utf8NoBom);
+            Console.WriteLine($"  recorded in {log}");
+        }
+        catch (Exception e)
+        {
+            // The transcript is already written; losing the note is a shame, not
+            // a failure worth failing the command over.
+            Console.Error.WriteLine($"couldn't record the change in transcribe.log: {e.Message}");
+        }
     }
 
     public static bool Handles(string command) => Names.Contains(command);
